@@ -6,6 +6,8 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
+exec 3<>/dev/tty
+
 REPO_URL="https://raw.githubusercontent.com/timshuang/wdog/main"
 INSTALL_DIR="/opt/wdog"
 CONF_DIR="/etc/wdog"
@@ -38,7 +40,7 @@ echo ""
 
 RESEND_KEY=""
 while true; do
-  read -rp "Enter your Resend API key (starts with re_): " RESEND_KEY
+  read -rp "Enter your Resend API key (starts with re_): " RESEND_KEY <&3
   if [[ "$RESEND_KEY" =~ ^re_ ]]; then
     break
   else
@@ -48,7 +50,7 @@ done
 
 ALERT_EMAIL=""
 while true; do
-  read -rp "Enter alert email address: " ALERT_EMAIL
+  read -rp "Enter alert email address: " ALERT_EMAIL <&3
   if [[ "$ALERT_EMAIL" =~ ^[^@]+@[^@]+\.[^@]+$ ]]; then
     break
   else
@@ -58,7 +60,7 @@ done
 
 CHECK_INTERVAL=""
 while true; do
-  read -rp "Enter check interval in minutes (1-1440) [5]: " CHECK_INTERVAL
+  read -rp "Enter check interval in minutes (1-1440) [5]: " CHECK_INTERVAL <&3
   CHECK_INTERVAL="${CHECK_INTERVAL:-5}"
   if [[ "$CHECK_INTERVAL" =~ ^[0-9]+$ ]] && [ "$CHECK_INTERVAL" -ge 1 ] && [ "$CHECK_INTERVAL" -le 1440 ]; then
     break
@@ -74,7 +76,7 @@ echo "  Alert email:    $ALERT_EMAIL"
 echo "  Check interval: $CHECK_INTERVAL min"
 echo ""
 
-read -rp "Proceed with installation? [Y/n] " confirm
+read -rp "Proceed with installation? [Y/n] " confirm <&3
 confirm="${confirm:-Y}"
 [[ "$confirm" =~ ^[Yy] ]] || { echo "Cancelled."; exit 0; }
 

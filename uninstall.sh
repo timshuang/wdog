@@ -6,6 +6,8 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
+exec 3<>/dev/tty
+
 echo "========================================="
 echo "  wdog uninstaller"
 echo "========================================="
@@ -19,7 +21,7 @@ echo "  - /var/log/wdog.log"
 echo "  - /var/run/wdog.pid"
 echo ""
 
-read -rp "Proceed with uninstall? [y/N] " confirm
+read -rp "Proceed with uninstall? [y/N] " confirm <&3
 [[ "$confirm" =~ ^[Yy]$ ]] || { echo "Cancelled."; exit 0; }
 
 echo "Stopping wdog service..."

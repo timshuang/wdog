@@ -15,7 +15,7 @@
 一键安装：
 
 ```bash
-curl -sL https://raw.githubusercontent.com/timshuang/wdog/main/install.sh | sudo bash
+curl -sL https://raw.githubusercontent.com/timshuang/wdog/refs/heads/master/install.sh | sudo bash
 ```
 
 或克隆后安装：
