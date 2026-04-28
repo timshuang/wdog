@@ -8,7 +8,7 @@ fi
 
 exec 3<>/dev/tty
 
-REPO_URL="https://raw.githubusercontent.com/timshuang/wdog/main"
+REPO_URL="https://raw.githubusercontent.com/timshuang/wdog/refs/heads/master"
 INSTALL_DIR="/opt/wdog"
 CONF_DIR="/etc/wdog"
 BIN_LINK="/usr/local/bin/wdog"
@@ -33,7 +33,7 @@ echo ""
 
 echo "Downloading wdog..."
 mkdir -p "$INSTALL_DIR/bin"
-curl -sL "$REPO_URL/bin/wdog" -o "$INSTALL_DIR/bin/wdog"
+curl -sfL "$REPO_URL/bin/wdog" -o "$INSTALL_DIR/bin/wdog" || { echo "Error: download failed"; exit 1; }
 chmod +x "$INSTALL_DIR/bin/wdog"
 echo "  Downloaded: $INSTALL_DIR/bin/wdog"
 echo ""
