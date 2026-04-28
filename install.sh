@@ -8,6 +8,11 @@ fi
 
 exec 3<>/dev/tty
 
+HAS_SYSTEMD=false
+if pidof systemd &>/dev/null; then
+  HAS_SYSTEMD=true
+fi
+
 REPO_URL="https://raw.githubusercontent.com/timshuang/wdog/refs/heads/master"
 INSTALL_DIR="/opt/wdog"
 CONF_DIR="/etc/wdog"
@@ -107,7 +112,8 @@ fi
 touch /var/log/wdog.log
 
 echo "Installing systemd service..."
-cat > /etc/systemd/system/wdog.service <<EOF
+if $HAS_SYSTEMD; then
+  cat > /etc/systemd/system/wdog.service <<EOF
 [Unit]
 Description=wdog process monitor
 After=network.target
@@ -124,21 +130,41 @@ StandardError=journal
 WantedBy=multi-user.target
 EOF
 
-ln -sf "$INSTALL_DIR/bin/wdog" "$BIN_LINK"
+  ln -sf "$INSTALL_DIR/bin/wdog" "$BIN_LINK"
 
-systemctl daemon-reload
-systemctl enable wdog
-systemctl start wdog
+  systemctl daemon-reload
+  systemctl enable wdog
+  systemctl start wdog
+else
+  ln -sf "$INSTALL_DIR/bin/wdog" "$BIN_LINK"
+fi
 
 echo ""
 echo "========================================="
 echo "  Installation complete!"
 echo "========================================="
 echo ""
-echo "  Daemon status: systemctl status wdog"
-echo "  View log:      tail -f /var/log/wdog.log"
-echo "  CLI:           wdog -h"
-echo ""
-echo "  Register:      wdog reg <name> [-m <pattern>]"
-echo "  List:          wdog list"
+if $HAS_SYSTEMD; then
+  echo "  Daemon status: systemctl status wdog"
+  echo "  View log:      tail -f /var/log/wdog.log"
+  echo "  CLI:           wdog -h"
+  echo ""
+  echo "  Register:      wdog reg <name> [-m <pattern>]"
+  echo "  List:          wdog list"
+else
+  echo "  WARNING: systemd not detected. Auto-start and crash-restart"
+  echo "  are unavailable."
+  echo ""
+  echo "  To enable systemd on WSL:"
+  echo "    1. sudo nano /etc/wsl.conf"
+  echo "    2. Add:"
+  echo "       [boot]"
+  echo "       systemd=true"
+  echo "    3. In Windows PowerShell: wsl --shutdown"
+  echo "    4. Re-enter WSL, then run:"
+  echo "       sudo systemctl enable wdog"
+  echo "       sudo systemctl start wdog"
+  echo ""
+  echo "  For now, run manually: wdog daemon"
+fi
 echo ""
