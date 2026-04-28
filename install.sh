@@ -89,6 +89,7 @@ echo ""
 echo "Installing config..."
 
 mkdir -p "$CONF_DIR"
+chmod 777 "$CONF_DIR"
 
 if [ -f "$CONF_DIR/config.json" ]; then
   echo "  Existing config.json found, updating mail and interval settings..."
@@ -106,10 +107,13 @@ else
 }
 EOF
 fi
+chmod 666 "$CONF_DIR/config.json"
 
 [ -f "$CONF_DIR/regs.json" ] || echo '[]' > "$CONF_DIR/regs.json"
+chmod 666 "$CONF_DIR/regs.json"
 
 touch /var/log/wdog.log
+chmod 666 /var/log/wdog.log
 
 echo "Installing systemd service..."
 if $HAS_SYSTEMD; then

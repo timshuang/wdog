@@ -12,7 +12,7 @@ BLACKLIST_PATTERN="^(sshd|systemd|systemd-.+|cron|crond|anacron|atd|nginx|apache
 
 log_msg() {
   local level="$1" msg="$2"
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] [$level] $msg" >> "$LOG_FILE"
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] [$level] $msg" >> "$LOG_FILE" 2>/dev/null || true
 }
 
 require_jq() {
@@ -27,7 +27,7 @@ ensure_dirs() {
   [ -f "$CONF_FILE" ] || echo '{"checkIntervalMin":5,"mail":{"to":"","resendKey":""}}' > "$CONF_FILE"
   [ -f "$REGS_FILE" ] || echo '[]' > "$REGS_FILE"
   mkdir -p "$(dirname "$LOG_FILE")"
-  touch "$LOG_FILE"
+  touch "$LOG_FILE" 2>/dev/null || true
 }
 
 is_system_process() {
