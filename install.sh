@@ -6,7 +6,7 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_URL="https://raw.githubusercontent.com/timshuang/wdog/main"
 INSTALL_DIR="/opt/wdog"
 CONF_DIR="/etc/wdog"
 BIN_LINK="/usr/local/bin/wdog"
@@ -27,6 +27,13 @@ if ! command -v curl &>/dev/null; then
 fi
 
 echo "Checking dependencies: jq=$(command -v jq) curl=$(command -v curl)"
+echo ""
+
+echo "Downloading wdog..."
+mkdir -p "$INSTALL_DIR/bin"
+curl -sL "$REPO_URL/bin/wdog" -o "$INSTALL_DIR/bin/wdog"
+chmod +x "$INSTALL_DIR/bin/wdog"
+echo "  Downloaded: $INSTALL_DIR/bin/wdog"
 echo ""
 
 RESEND_KEY=""
@@ -72,11 +79,7 @@ confirm="${confirm:-Y}"
 [[ "$confirm" =~ ^[Yy] ]] || { echo "Cancelled."; exit 0; }
 
 echo ""
-echo "Installing files..."
-
-mkdir -p "$INSTALL_DIR/bin"
-cp "$SCRIPT_DIR/bin/wdog" "$INSTALL_DIR/bin/wdog"
-chmod +x "$INSTALL_DIR/bin/wdog"
+echo "Installing config..."
 
 mkdir -p "$CONF_DIR"
 
