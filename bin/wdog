@@ -1,0 +1,346 @@
+#!/bin/bash
+set -euo pipefail
+
+CONF_DIR="/etc/wdog"
+CONF_FILE="$CONF_DIR/config.json"
+REGS_FILE="$CONF_DIR/regs.json"
+PID_FILE="/var/run/wdog.pid"
+LOG_FILE="/var/log/wdog.log"
+ALERT_COOLDOWN_SEC=86400
+
+BLACKLIST_PATTERN="^(sshd|systemd|systemd-.+|cron|crond|anacron|atd|nginx|apache2?|httpd|mysqld|mariadbd|postgres|redis-server|redis-sentinel|mongod|docker|containerd|dockerd|kubelet|etcd|vaultd|consul|nomad|bash|dash|sh|zsh|fish|python3?|node|ruby|java|php-fpm|perl|vim|nano|emacs|grep|awk|sed|cat|ls|cp|mv|rm|echo|ps|top|htop|kill|mount|umount|sudo|su|login|init|udevd|dbus-daemon|NetworkManager|rsyslogd|syslogd|snapd|polkitd|accounts-daemon|agetty|getty|irqbalance|thermald|udisksd|upowerd|colord|rtkit-daemon|geoclue|gnome-shell|gdm|lightdm|sddm|cupsd|avahi-daemon|bluetoothd|wpa_supplicant|iwd|nscd|sssd|oddjobd|autofs|rpcbind|rpciod|nfsd|lockd|gpg-agent|dirmngr|pcscd|packagekitd|fwupd|colord-sane|pulseaudio|pipewire|wireplumber|swapper|kworker|ksoftirqd|migration|rcu_|bioset|kblockd|edac-poller|devfreq_wq|pm_wq|nvme|scsi|md|jbd2|ext4|xfs|btrfs|loop|bond|teamd|firewalld|iptables|nftables|chronyd|ntpd|timedatex|tuned|certmonger|oddjob|sssd|winbindd|smdb|nmbd|cifs|smbd)$"
+
+log_msg() {
+  local level="$1" msg="$2"
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] [$level] $msg" >> "$LOG_FILE"
+}
+
+require_jq() {
+  if ! command -v jq &>/dev/null; then
+    echo "Error: jq is required. Install it with: sudo apt install jq"
+    exit 1
+  fi
+}
+
+ensure_dirs() {
+  mkdir -p "$CONF_DIR"
+  [ -f "$CONF_FILE" ] || echo '{"checkIntervalMin":5,"mail":{"to":"","resendKey":""}}' > "$CONF_FILE"
+  [ -f "$REGS_FILE" ] || echo '[]' > "$REGS_FILE"
+  mkdir -p "$(dirname "$LOG_FILE")"
+  touch "$LOG_FILE"
+}
+
+is_system_process() {
+  local name="$1"
+  [[ "$name" =~ $BLACKLIST_PATTERN ]]
+}
+
+validate_email() {
+  local email="$1"
+  [[ "$email" =~ ^[^@]+@[^@]+\.[^@]+$ ]]
+}
+
+validate_resend_key() {
+  local key="$1"
+  [[ "$key" =~ ^re_ ]]
+}
+
+validate_interval() {
+  local val="$1"
+  [[ "$val" =~ ^[0-9]+$ ]] && [ "$val" -ge 1 ] && [ "$val" -le 1440 ]
+}
+
+send_alert() {
+  local name="$1"
+  local to reskey
+  to=$(jq -r '.mail.to // empty' "$CONF_FILE")
+  reskey=$(jq -r '.mail.resendKey // empty' "$CONF_FILE")
+  if [ -z "$to" ] || [ -z "$reskey" ]; then
+    log_msg "WARN" "Cannot send alert for $name: email not configured"
+    return 1
+  fi
+  local timestamp
+  timestamp=$(date -Iseconds)
+  local subject="wdog: $name has stopped"
+  local body="<p>Process <strong>${name}</strong> was detected as stopped at ${timestamp}.</p>"
+  local response
+  response=$(curl -s -w "\n%{http_code}" https://api.resend.com/emails \
+    -H "Authorization: Bearer ${reskey}" \
+    -H "Content-Type: application/json" \
+    -d "{\"from\":\"wdog <onboarding@resend.dev>\",\"to\":[\"${to}\"],\"subject\":\"${subject}\",\"html\":\"${body}\"}" 2>/dev/null || echo -e "\n000")
+  local http_code
+  http_code=$(echo "$response" | tail -1)
+  if [ "$http_code" = "200" ]; then
+    log_msg "INFO" "Alert email sent for $name"
+    return 0
+  else
+    log_msg "ERROR" "Failed to send alert for $name (HTTP $http_code)"
+    return 1
+  fi
+}
+
+show_help() {
+  cat <<'EOF'
+wdog - lightweight process monitor with email alerts
+
+Usage:
+  wdog daemon                              Start daemon (called by systemd)
+  wdog reg <name> [-m <pattern>]           Register process to monitor
+  wdog unreg <name>                        Unregister process
+  wdog setmail <email> <resend_api_key>    Configure alert email
+  wdog interval <minutes>                  Set check interval (1-1440 min)
+  wdog list                                List registered processes and status
+  wdog -h                                  Show this help
+
+Options:
+  -m <pattern>   pgrep -f match pattern (default: same as <name>)
+
+Files:
+  /etc/wdog/config.json    Global config
+  /etc/wdog/regs.json      Process registry
+  /var/log/wdog.log        Log file
+  /var/run/wdog.pid        PID file
+
+Examples:
+  wdog reg keepalive
+  wdog reg myapp -m "node /opt/myapp/index.js"
+  wdog unreg keepalive
+  wdog setmail admin@example.com re_xxxxx
+  wdog interval 10
+  wdog list
+EOF
+}
+
+do_reg() {
+  require_jq
+  ensure_dirs
+  local name="" match="" skip_confirm=0
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -m) shift; match="${1:-}"; shift ;;
+      -y) skip_confirm=1; shift ;;
+      -*) echo "Unknown option: $1"; exit 1 ;;
+      *) [ -z "$name" ] && name="$1" && shift || shift ;;
+    esac
+  done
+
+  name=$(echo "$name" | xargs)
+  if [ -z "$name" ]; then
+    echo "Usage: wdog reg <name> [-m <pattern>]"
+    exit 1
+  fi
+
+  if [ -z "$match" ]; then
+    match="$name"
+  fi
+
+  if is_system_process "$name"; then
+    echo "WARNING: \"$name\" appears to be a system process."
+    if [ "$skip_confirm" -eq 0 ]; then
+      read -rp "Are you sure? [y/N] " answer
+      [[ "$answer" =~ ^[Yy]$ ]] || { echo "Cancelled."; exit 0; }
+    fi
+  fi
+
+  local timestamp
+  timestamp=$(date -Iseconds)
+
+  local existing
+  existing=$(jq --arg n "$name" '[.[] | select(.name == $n)] | length' "$REGS_FILE")
+
+  if [ "$existing" -gt 0 ]; then
+    tmp=$(jq --arg n "$name" --arg m "$match" --arg t "$timestamp" \
+      '(.[] | select(.name == $n)) |= {name: $n, match: $m, registeredAt: $t, lastAlert: .lastAlert}' "$REGS_FILE")
+    echo "$tmp" > "$REGS_FILE"
+    echo "Updated: $name (match: $match)"
+  else
+    tmp=$(jq --arg n "$name" --arg m "$match" --arg t "$timestamp" '. + [{name: $n, match: $m, registeredAt: $t, lastAlert: null}]' "$REGS_FILE")
+    echo "$tmp" > "$REGS_FILE"
+    echo "Registered: $name (match: $match)"
+  fi
+  log_msg "INFO" "Registered: $name (match: $match)"
+}
+
+do_unreg() {
+  require_jq
+  ensure_dirs
+  local name
+  name=$(echo "${1:-}" | xargs)
+  if [ -z "$name" ]; then
+    echo "Usage: wdog unreg <name>"
+    exit 1
+  fi
+
+  local count
+  count=$(jq --arg n "$name" '[.[] | select(.name == $n)] | length' "$REGS_FILE")
+  if [ "$count" -eq 0 ]; then
+    exit 0
+  fi
+
+  tmp=$(jq --arg n "$name" 'del(.[] | select(.name == $n))' "$REGS_FILE")
+  echo "$tmp" > "$REGS_FILE"
+  echo "Unregistered: $name"
+  log_msg "INFO" "Unregistered: $name"
+}
+
+do_setmail() {
+  require_jq
+  ensure_dirs
+  local email="${1:-}" key="${2:-}"
+  if [ -z "$email" ] || [ -z "$key" ]; then
+    echo "Usage: wdog setmail <email> <resend_api_key>"
+    exit 1
+  fi
+
+  if ! validate_email "$email"; then
+    echo "Error: invalid email format"
+    exit 1
+  fi
+  if ! validate_resend_key "$key"; then
+    echo "Error: Resend API key must start with 're_'"
+    exit 1
+  fi
+
+  tmp=$(jq --arg e "$email" --arg k "$key" '.mail.to = $e | .mail.resendKey = $k' "$CONF_FILE")
+  echo "$tmp" > "$CONF_FILE"
+  echo "Email configured: $email"
+  log_msg "INFO" "Email configured: $email"
+}
+
+do_interval() {
+  require_jq
+  ensure_dirs
+  local val="${1:-}"
+  if [ -z "$val" ]; then
+    echo "Usage: wdog interval <minutes>"
+    exit 1
+  fi
+
+  if ! validate_interval "$val"; then
+    echo "Error: interval must be an integer between 1 and 1440"
+    exit 1
+  fi
+
+  tmp=$(jq --argjson v "$val" '.checkIntervalMin = $v' "$CONF_FILE")
+  echo "$tmp" > "$CONF_FILE"
+  echo "Check interval set to $val minutes"
+  log_msg "INFO" "Check interval set to $val minutes"
+}
+
+do_list() {
+  require_jq
+  ensure_dirs
+  local count
+  count=$(jq 'length' "$REGS_FILE")
+  if [ "$count" -eq 0 ]; then
+    echo "No processes registered."
+    return 0
+  fi
+
+  local interval
+  interval=$(jq -r '.checkIntervalMin // 5' "$CONF_FILE")
+  local mail_to
+  mail_to=$(jq -r '.mail.to // "not configured"' "$CONF_FILE")
+
+  printf "%-20s %-30s %-8s %-22s\n" "Name" "Match" "Status" "Last Alert"
+  printf "%-20s %-30s %-8s %-22s\n" "----" "-----" "------" "-----------"
+
+  for i in $(seq 0 $((count - 1))); do
+    local name match last_alert
+    name=$(jq -r ".[$i].name" "$REGS_FILE")
+    match=$(jq -r ".[$i].match" "$REGS_FILE")
+    last_alert=$(jq -r ".[$i].lastAlert // \"-\"" "$REGS_FILE")
+
+    local status="DEAD"
+    if pgrep -f "$match" >/dev/null 2>&1; then
+      status="ALIVE"
+    fi
+
+    printf "%-20s %-30s %-8s %-22s\n" "$name" "$match" "$status" "$last_alert"
+  done
+
+  echo ""
+  echo "Interval: ${interval} min | Alert email: ${mail_to}"
+}
+
+do_daemon() {
+  require_jq
+  ensure_dirs
+
+  if [ -f "$PID_FILE" ]; then
+    local old_pid
+    old_pid=$(cat "$PID_FILE" 2>/dev/null || echo "")
+    if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
+      echo "wdog daemon is already running (PID $old_pid)"
+      exit 1
+    fi
+  fi
+
+  echo $$ > "$PID_FILE"
+
+  cleanup() {
+    rm -f "$PID_FILE"
+    log_msg "INFO" "wdog daemon stopped"
+    exit 0
+  }
+  trap cleanup SIGTERM SIGINT SIGQUIT
+
+  log_msg "INFO" "wdog daemon started (PID $$)"
+
+  while true; do
+    local interval
+    interval=$(jq -r '.checkIntervalMin // 5' "$CONF_FILE")
+
+    local count
+    count=$(jq 'length' "$REGS_FILE")
+
+    if [ "$count" -gt 0 ]; then
+      for i in $(seq 0 $((count - 1)));  do
+        local name match last_alert
+        name=$(jq -r ".[$i].name" "$REGS_FILE")
+        match=$(jq -r ".[$i].match" "$REGS_FILE")
+        last_alert=$(jq -r ".[$i].lastAlert // \"\"" "$REGS_FILE")
+
+        if pgrep -f "$match" >/dev/null 2>&1; then
+          : 
+        else
+          log_msg "WARN" "$name: dead"
+
+          local should_alert=1
+          if [ -n "$last_alert" ]; then
+            local now_ts last_ts
+            now_ts=$(date +%s)
+            last_ts=$(date -d "$last_alert" +%s 2>/dev/null || echo 0)
+            if (( now_ts - last_ts < ALERT_COOLDOWN_SEC )); then
+              should_alert=0
+              log_msg "INFO" "$name: alert skipped (cooldown)"
+            fi
+          fi
+
+          if [ "$should_alert" -eq 1 ]; then
+            if send_alert "$name"; then
+              local now_iso
+              now_iso=$(date -Iseconds)
+              tmp=$(jq --arg n "$name" --arg t "$now_iso" '(.[] | select(.name == $n)).lastAlert = $t' "$REGS_FILE")
+              echo "$tmp" > "$REGS_FILE"
+            fi
+          fi
+        fi
+      done
+    fi
+
+    sleep "$((interval * 60))"
+  done
+}
+
+case "${1:-}" in
+  -h|--help) show_help ;;
+  daemon) do_daemon ;;
+  reg) do_reg "${@:2}" ;;
+  unreg) do_unreg "${@:2}" ;;
+  setmail) do_setmail "${@:2}" ;;
+  interval) do_interval "${@:2}" ;;
+  list) do_list ;;
+  *) show_help ;;
+esac
