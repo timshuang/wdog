@@ -125,7 +125,7 @@ do_reg() {
     esac
   done
 
-  name=$(echo "$name" | xargs)
+  name=$(echo "$name" | xargs | tr '[:upper:]' '[:lower:]') # 进程名统一转小写，避免大小写不一致
   if [ -z "$name" ]; then
     echo "Usage: wdog reg <name> [-m <pattern>]"
     exit 1
@@ -166,7 +166,7 @@ do_unreg() {
   require_jq
   ensure_dirs
   local name
-  name=$(echo "${1:-}" | xargs)
+  name=$(echo "${1:-}" | xargs | tr '[:upper:]' '[:lower:]') # 进程名统一转小写，避免大小写不一致
   if [ -z "$name" ]; then
     echo "Usage: wdog unreg <name>"
     exit 1
@@ -253,7 +253,7 @@ do_list() {
     last_alert=$(jq -r ".[$i].lastAlert // \"-\"" "$REGS_FILE")
 
     local status="DEAD"
-    if pgrep -f "$match" >/dev/null 2>&1; then
+    if pgrep -fi "$match" >/dev/null 2>&1; then # -i 忽略大小写匹配
       status="ALIVE"
     fi
 
@@ -302,7 +302,7 @@ do_daemon() {
         match=$(jq -r ".[$i].match" "$REGS_FILE")
         last_alert=$(jq -r ".[$i].lastAlert // \"\"" "$REGS_FILE")
 
-        if pgrep -f "$match" >/dev/null 2>&1; then
+        if pgrep -fi "$match" >/dev/null 2>&1; then # -i 忽略大小写匹配
           : 
         else
           log_msg "WARN" "$name: dead"
